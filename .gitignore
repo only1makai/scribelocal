@@ -1,0 +1,49 @@
+# --- secrets -----------------------------------------------------------------
+# .env holds ANTHROPIC_API_KEY and HF_TOKEN. The .env.* rule catches variants
+# like .env.local; the negation keeps the checked-in placeholder template.
+.env
+.env.*
+!.env.example
+
+# --- personal data -----------------------------------------------------------
+# Recordings, transcripts and summaries are private and never belong in the
+# repo. notes_dir normally lives outside it, but these guard against a session
+# folder ever being created or copied inside.
+MeetingNotes/
+inbox/
+
+# Audio in any format the recorder or the inbox watcher can produce.
+*.wav
+*.m4a
+*.mp3
+*.aac
+*.flac
+*.ogg
+*.opus
+*.mp4
+*.m4b
+*.amr
+*.wma
+
+# Session outputs, in case a session folder ends up inside the repo.
+transcript.md
+summary.md
+meta.json
+
+# --- python ------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

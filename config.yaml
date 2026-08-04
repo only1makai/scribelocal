@@ -1,0 +1,54 @@
+# ScribeLocal configuration. All paths support ~ expansion.
+
+paths:
+  notes_dir: ~/Documents/MeetingNotes        # session folders land here
+  inbox_dir: ~/Documents/MeetingNotes/inbox  # drop audio here and the watcher imports it
+
+audio:
+  retention_days: 7        # NOT YET ENFORCED - no cleanup job deletes old WAVs
+  mic_device: null         # null = system default input; or a device index from `scribe devices`
+  loopback_device: null    # null = default output's WASAPI loopback; or a device index
+  chunk_frames: 4096       # frames per buffer written to disk
+
+whisper:
+  model: medium            # tiny | base | small | medium | large-v3
+  device: auto             # auto | cpu | cuda
+  compute_type: auto       # auto | int8 | float16 | ...
+  language: null           # null = autodetect
+
+# Merging the two tracks into one transcript. The mic hears the speakers and the
+# loopback can hear you, so the same speech often lands on both tracks; these
+# settings control how that duplication is detected and which copy survives.
+merge:
+  dedup: true              # false = keep every segment from both tracks
+  time_tolerance: 2.0      # seconds of start-time slop when pairing segments
+  min_overlap: 0.3         # fraction of the shorter segment that must overlap
+  similarity: 0.82         # 0-1 text similarity to call two segments the same speech
+  silence_floor_dbfs: -50  # drop segments quieter than this (whisper hallucinates on silence)
+  max_no_speech: 0.6       # drop segments whisper itself scores as non-speech above this
+
+# Phone sync drop folder. Audio placed in inbox_dir is moved into a new session
+# and processed automatically. Runs inside `scribe serve`, or on its own with
+# `scribe watch`.
+inbox:
+  enabled: true            # false = ignore the inbox entirely
+  poll_seconds: 2.0        # how often to look
+  stable_seconds: 3.0      # size/mtime must hold still this long (partial syncs)
+  summarize: true          # false = transcribe imports but don't call the API
+  template: null           # null = summarize.template
+  extensions: [.m4a, .mp3, .wav, .aac, .flac, .ogg, .opus, .mp4, .m4b, .amr, .wma]
+
+diarization:
+  enabled: false           # needs HF_TOKEN in .env; slow
+
+summarize:
+  model: claude-sonnet-4-6
+  template: general        # general | class-lecture | work-shift | club-meeting | sales-call
+  max_chunk_chars: 150000  # chunk transcripts larger than this before summarizing
+  max_output_tokens: 8000  # per API call; raise if summaries come back truncated
+  thinking: adaptive       # adaptive | off  (model-dependent; off for older models)
+  effort: null             # null | low | medium | high  (model-dependent)
+
+server:
+  host: 127.0.0.1
+  port: 8321

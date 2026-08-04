@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScribeLocal</title>
+<style>
+  :root {
+    --bg:      #0e0f11;
+    --panel:   #16181b;
+    --panel-2: #1c1f23;
+    --line:    #2a2e34;
+    --text:    #e8eaed;
+    --muted:   #8b939c;
+    --accent:  #ffb454;
+    --rec:     #ff4d4d;
+    --ok:      #7ee787;
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+
+  /* ---------------------------------------------------------------- chrome */
+  header {
+    display:flex; align-items:center; gap:24px;
+    padding:14px 22px; border-bottom:1px solid var(--line);
+    position:sticky; top:0; background:var(--bg); z-index:10;
+  }
+  .brand { font-family:var(--mono); font-weight:600; letter-spacing:-0.02em; font-size:15px; }
+  .brand .dot { color:var(--accent); }
+  nav { display:flex; gap:4px; }
+  nav button {
+    background:none; border:none; color:var(--muted); cursor:pointer;
+    font-family:var(--mono); font-size:13px; padding:6px 12px; border-radius:6px;
+  }
+  nav button:hover { color:var(--text); background:var(--panel); }
+  nav button.active { color:var(--bg); background:var(--accent); font-weight:600; }
+  .rec-pill {
+    margin-left:auto; display:none; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:12px; color:var(--rec);
+    border:1px solid var(--rec); border-radius:999px; padding:4px 12px;
+  }
+  .rec-pill.on { display:flex; }
+  .blink { width:8px; height:8px; border-radius:50%; background:var(--rec); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+  main { max-width:1180px; margin:0 auto; padding:26px 22px 80px; }
+  .view { display:none; }
+  .view.active { display:block; }
+  h2 { font-size:13px; font-family:var(--mono); text-transform:uppercase;
+       letter-spacing:.08em; color:var(--muted); margin:0 0 14px; font-weight:600; }
+
+  /* ---------------------------------------------------------------- record */
+  .record-grid { display:grid; grid-template-columns: 320px 1fr; gap:26px; align-items:start; }
+  @media (max-width:820px){ .record-grid { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px; }
+
+  .rec-btn {
+    width:100%; padding:26px 20px; border-radius:10px; cursor:pointer;
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    font-family:var(--mono); font-size:15px; font-weight:600; letter-spacing:.04em;
+    display:flex; flex-direction:column; align-items:center; gap:14px;
+    transition:border-color .15s, background .15s;
+  }
+  .rec-btn:hover:not(:disabled) { border-color:var(--rec); background:#20232733; }
+  .rec-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .rec-btn .glyph {
+    width:46px; height:46px; border-radius:50%; background:var(--rec);
+    box-shadow:0 0 0 4px #ff4d4d22; transition:border-radius .18s, transform .18s;
+  }
+  .rec-btn.recording .glyph { border-radius:6px; transform:scale(.8); }
+  .timer { font-family:var(--mono); font-size:42px; font-weight:300; letter-spacing:.02em;
+           text-align:center; margin:18px 0 4px; font-variant-numeric:tabular-nums; }
+  .timer.idle { color:var(--muted); }
+
+  label.field { display:block; margin-bottom:16px; }
+  label.field span { display:block; font-family:var(--mono); font-size:11px;
+    text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:6px; }
+  input[type=text], input[type=number], select {
+    width:100%; background:var(--bg); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; padding:9px 11px;
+    font-family:var(--sans); font-size:14px;
+  }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
+  input:disabled, select:disabled { opacity:.55; }
+
+  .meter-row { margin-bottom:16px; }
+  .meter-head { display:flex; justify-content:space-between; align-items:baseline;
+                font-family:var(--mono); font-size:12px; margin-bottom:6px; }
+  .meter-head .name { color:var(--text); }
+  .meter-head .dev { color:var(--muted); font-size:11px; max-width:60%;
+                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meter { height:14px; background:var(--bg); border:1px solid var(--line);
+           border-radius:4px; overflow:hidden; position:relative; }
+  .meter .fill { height:100%; width:0%;
+    background:linear-gradient(90deg,#3fb950 0%,#3fb950 62%,#ffb454 82%,#ff4d4d 100%);
+    transition:width .08s linear; }
+  .meter .ticks { position:absolute; inset:0; pointer-events:none;
+    background:repeating-linear-gradient(90deg,transparent 0 9.9%,#0e0f1155 9.9% 10%); }
+  .meter-empty { color:var(--muted); font-family:var(--mono); font-size:12px; }
+
+  /* -------------------------------------------------------------- sessions */
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-family:var(--mono); font-size:11px; text-transform:uppercase;
+       letter-spacing:.08em; color:var(--muted); font-weight:600;
+       padding:0 12px 8px; border-bottom:1px solid var(--line); }
+  td { padding:11px 12px; border-bottom:1px solid var(--line); font-size:14px; }
+  tr.row { cursor:pointer; }
+  tr.row:hover td { background:var(--panel); }
+  .name-cell { font-family:var(--mono); font-size:13px; }
+  .title-cell { color:var(--muted); }
+  .badges { display:flex; gap:5px; }
+  .badge { font-family:var(--mono); font-size:10px; font-weight:700; width:20px; height:20px;
+    display:grid; place-items:center; border-radius:4px;
+    background:var(--panel-2); color:#4a5058; border:1px solid var(--line); }
+  .badge.on { background:#7ee78722; color:var(--ok); border-color:#7ee78755; }
+  .empty { color:var(--muted); padding:40px 0; text-align:center; font-family:var(--mono); font-size:13px; }
+
+  /* ---------------------------------------------------------------- detail */
+  .detail-head { display:flex; align-items:flex-start; gap:16px; margin-bottom:18px; }
+  .detail-head h1 { font-size:22px; margin:0 0 4px; font-weight:600; }
+  .detail-meta { font-family:var(--mono); font-size:12px; color:var(--muted); }
+  .split { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+  @media (max-width:900px){ .split { grid-template-columns:1fr; } }
+  .doc { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+         padding:18px 20px; max-height:66vh; overflow-y:auto; }
+  .doc h1 { font-size:18px; margin:0 0 10px; }
+  .doc h2 { font-size:12px; color:var(--accent); margin:20px 0 8px;
+            font-family:var(--mono); text-transform:uppercase; letter-spacing:.06em; }
+  .doc h3 { font-size:14px; margin:14px 0 6px; }
+  .doc p { margin:0 0 10px; }
+  .doc em { color:var(--muted); font-style:normal; font-family:var(--mono); font-size:12px; }
+  .doc code { font-family:var(--mono); font-size:12.5px; background:var(--panel-2);
+              padding:1px 5px; border-radius:4px; }
+  .doc ul { margin:0 0 10px; padding-left:20px; }
+  .doc li { margin-bottom:4px; }
+  .doc .turn { margin:0 0 10px; }
+  .doc .ts { font-family:var(--mono); font-size:12px; color:var(--muted); }
+  .doc .who { font-weight:600; color:var(--accent); }
+  .doc .who.them { color:#79c0ff; }
+
+  /* ----------------------------------------------------------------- misc */
+  button.act {
+    background:var(--panel-2); color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:8px 14px; font-family:var(--mono); font-size:12.5px;
+    cursor:pointer;
+  }
+  button.act:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  button.act:disabled { opacity:.45; cursor:not-allowed; }
+  button.act.primary { background:var(--accent); color:#161616; border-color:var(--accent); font-weight:600; }
+  button.act.primary:hover:not(:disabled) { filter:brightness(1.1); color:#161616; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  .check { display:flex; align-items:center; gap:6px; font-family:var(--mono);
+           font-size:12.5px; color:var(--muted); cursor:pointer; }
+  .check input { accent-color:var(--accent); }
+  .log { font-family:var(--mono); font-size:12px; background:var(--bg);
+         border:1px solid var(--line); border-radius:6px; padding:12px;
+         max-height:180px; overflow-y:auto; white-space:pre-wrap; color:var(--muted); }
+  .log .err { color:var(--rec); }
+  .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:7px; }
+  .status-dot.ok { background:var(--ok); }
+  .status-dot.off { background:#4a5058; }
+  .warn { border:1px solid #ffb45455; background:#ffb45411; color:var(--accent);
+          border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px; }
+  #toasts { position:fixed; right:18px; bottom:18px; display:flex;
+            flex-direction:column; gap:8px; z-index:50; max-width:min(460px,80vw); }
+  .toast { border-radius:8px; padding:11px 15px; font-size:13px; border:1px solid var(--line);
+           background:var(--panel-2); box-shadow:0 6px 24px #0008; }
+  .toast.error { border-color:var(--rec); color:#ffb3b3; }
+  .toast.ok { border-color:#7ee78755; color:var(--ok); }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:18px; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:7px 0;
+        border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); font-family:var(--mono); font-size:12px; }
+  .kv .v { font-family:var(--mono); font-size:12px; text-align:right; word-break:break-all; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">scribe<span class="dot">.</span>local</div>
+  <nav>
+    <button data-view="record" class="active">record</button>
+    <button data-view="sessions">sessions</button>
+    <button data-view="settings">settings</button>
+  </nav>
+  <div class="rec-pill" id="recPill"><span class="blink"></span><span id="pillTime">00:00</span></div>
+</header>
+
+<main>
+  <!-- ============================================================ RECORD -->
+  <section class="view active" id="view-record">
+    <div id="recWarn"></div>
+    <div class="record-grid">
+      <div>
+        <button class="rec-btn" id="recBtn">
+          <span class="glyph"></span>
+          <span id="recBtnLabel">RECORD</span>
+        </button>
+        <div class="timer idle" id="timer">00:00</div>
+        <div style="text-align:center" class="hint" id="recSession">not recording</div>
+      </div>
+
+      <div class="panel">
+        <h2>Session</h2>
+        <label class="field">
+          <span>Title</span>
+          <input type="text" id="title" placeholder="meeting" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Summary template</span>
+          <select id="template"></select>
+        </label>
+
+        <h2 style="margin-top:24px">Input levels</h2>
+        <div id="meters"><div class="meter-empty">idle — start recording to see levels</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================== SESSIONS -->
+  <section class="view" id="view-sessions">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <h2 style="margin:0">Sessions</h2>
+      <button class="act" id="refreshSessions">refresh</button>
+      <span class="hint" id="notesDir" style="margin:0 0 0 auto"></span>
+    </div>
+    <div id="sessionsBody"></div>
+  </section>
+
+  <!-- ============================================================ DETAIL -->
+  <section class="view" id="view-detail">
+    <button class="act" id="backBtn" style="margin-bottom:16px">&larr; back</button>
+    <div id="detailBody"></div>
+  </section>
+
+  <!-- ========================================================== SETTINGS -->
+  <section class="view" id="view-settings">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <div class="panel">
+        <h2>Transcription</h2>
+        <label class="field">
+          <span>Whisper model</span>
+          <select id="setModel"></select>
+        </label>
+        <label class="check" style="margin-bottom:14px">
+          <input type="checkbox" id="setDiarize"> speaker diarization (pyannote)
+        </label>
+        <div class="kv"><span class="k">HF_TOKEN</span><span class="v" id="hfStatus"></span></div>
+        <div class="hint">Diarization needs HF_TOKEN in .env and is slow. Channel labels
+          (Me / Others) already work without it.</div>
+      </div>
+
+      <div class="panel">
+        <h2>Audio &amp; API</h2>
+        <label class="field">
+          <span>Audio retention (days) — not yet enforced</span>
+          <input type="number" id="setRetention" min="0" max="3650">
+        </label>
+        <div class="kv"><span class="k">ANTHROPIC_API_KEY</span><span class="v" id="apiStatus"></span></div>
+        <div class="kv"><span class="k">summary model</span><span class="v" id="sumModel"></span></div>
+        <div class="kv"><span class="k">notes dir</span><span class="v" id="setNotesDir"></span></div>
+        <div class="kv"><span class="k">inbox</span><span class="v" id="setInbox"></span></div>
+        <div class="hint">The key is read from .env and never sent to this page.
+          Retention is stored but no cleanup job runs yet — delete old WAVs yourself.</div>
+      </div>
+
+      <div class="panel">
+        <h2>Audio devices</h2>
+        <!-- Machines with virtual audio suites (Wave Link, VoiceMeeter) can list
+             dozens of endpoints; keep the panel from running off the page. -->
+        <div id="devices" style="max-height:260px;overflow-y:auto"></div>
+      </div>
+    </div>
+    <div class="controls" style="margin-top:18px">
+      <button class="act primary" id="saveSettings">save settings</button>
+      <span class="hint" id="settingsHint"></span>
+    </div>
+  </section>
+</main>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+
+const state = {
+  view: "record",
+  recording: false,
+  templates: [],
+  sessions: [],
+  detail: null,
+  jobId: null,
+  settings: null,
+};
+
+// ------------------------------------------------------------------- utils
+const $ = (id) => document.getElementById(id);
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  let payload = null;
+  try { payload = await res.json(); } catch (_) { /* 204s and friends */ }
+  if (!res.ok) {
+    const detail = (payload && (payload.detail || payload.message)) || res.statusText;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return payload;
+}
+
+function toast(message, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.textContent = message;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), kind === "error" ? 9000 : 4000);
+}
+
+function clock(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function humanBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+
+// Minimal Markdown -> HTML. Deliberately small: transcripts and summaries are
+// generated by us and by Claude in a known shape, and a real parser would mean
+// a build step or a CDN, neither of which belongs in an offline tool.
+function renderMarkdown(src) {
+  const lines = String(src).split("\n");
+  const out = [];
+  let inList = false;
+  let para = [];
+
+  const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
+  // Markdown joins consecutive lines into one paragraph; summaries come back
+  // hard-wrapped, so treating each source line as its own <p> would shred them.
+  const closePara = () => {
+    if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+  };
+  const closeAll = () => { closePara(); closeList(); };
+
+  const inline = (text) => escapeHtml(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { closeAll(); continue; }
+
+    // Transcript turns: **[00:01:02] Speaker:** text
+    const turn = line.match(/^\*\*\[(\d{2}:\d{2}:\d{2})\]\s*([^:*]+):\*\*\s*(.*)$/);
+    if (turn) {
+      closeAll();
+      const them = !/^me\b/i.test(turn[2]);
+      out.push(`<p class="turn"><span class="ts">[${escapeHtml(turn[1])}]</span> ` +
+               `<span class="who${them ? " them" : ""}">${escapeHtml(turn[2])}:</span> ` +
+               `${inline(turn[3])}</p>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      closeAll();
+      const level = Math.min(heading[1].length, 4);
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+    const item = line.match(/^\s*[-*]\s+(.*)$/);
+    if (item) {
+      closePara();
+      if (!inList) { out.push("<ul>"); inList = true; }
+      const body = item[1].replace(/^\[( |x|X)\]\s*/, (_m, mark) =>
+        (mark.toLowerCase() === "x" ? "☑ " : "☐ "));
+      out.push(`<li>${inline(body)}</li>`);
+      continue;
+    }
+    // A wrapped continuation of a list item stays with that item.
+    if (inList && /^\s{2,}\S/.test(raw)) {
+      out.push(out.pop().replace(/<\/li>$/, " " + inline(line.trim()) + "</li>"));
+      continue;
+    }
+    closeList();
+    para.push(line.trim());
+  }
+  closeAll();
+  return out.join("\n");
+}
+
+// ------------------------------------------------------------------ routing
+function show(view) {
+  state.view = view;
+  document.querySelectorAll(".view").forEach((el) => el.classList.remove("active"));
+  $("view-" + view).classList.add("active");
+  document.querySelectorAll("nav button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === view));
+  if (view === "sessions") loadSessions();
+  if (view === "settings") { loadSettings(); loadDevices(); }
+}
+
+document.querySelectorAll("nav button").forEach((btn) =>
+  btn.addEventListener("click", () => show(btn.dataset.view)));
+$("backBtn").addEventListener("click", () => show("sessions"));
+
+// ------------------------------------------------------------------- record
+async function loadTemplates() {
+  state.templates = await api("/api/templates");
+  const options = state.templates
+    .map((t) => `<option value="${t.key}">${escapeHtml(t.label)}</option>`).join("");
+  $("template").innerHTML = options;
+}
+
+$("recBtn").addEventListener("click", async () => {
+  const btn = $("recBtn");
+  btn.disabled = true;
+  try {
+    if (state.recording) {
+      const done = await api("/api/record/stop", { method: "POST" });
+      toast(`saved ${done.session} (${clock(done.duration_seconds)})`, "ok");
+      await refreshStatus();
+      offerProcessing(done);
+    } else {
+      await api("/api/record/start", {
+        method: "POST",
+        body: JSON.stringify({ title: $("title").value, template: $("template").value }),
+      });
+      await refreshStatus();
+    }
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function offerProcessing(done) {
+  const box = $("recSession");
+  box.innerHTML = `saved <strong>${escapeHtml(done.session)}</strong> — ` +
+    `<a href="#" id="processNow">process it now</a>`;
+  $("processNow").addEventListener("click", async (event) => {
+    event.preventDefault();
+    try {
+      const job = await api(`/api/sessions/${encodeURIComponent(done.session)}/process`, {
+        method: "POST",
+        body: JSON.stringify({ transcribe: true, summarize: true, force: false }),
+      });
+      state.jobId = job.id;
+      toast("processing started", "ok");
+      openSession(done.session);
+    } catch (err) { toast(err.message, "error"); }
+  });
+}
+
+function renderMeters(tracks) {
+  const box = $("meters");
+  if (!tracks || !tracks.length) {
+    box.innerHTML = '<div class="meter-empty">idle — start recording to see levels</div>';
+    return;
+  }
+  box.innerHTML = tracks.map((t) => `
+    <div class="meter-row">
+      <div class="meter-head">
+        <span class="name">${escapeHtml(t.label)}</span>
+        <span class="dev" title="${escapeHtml(t.device)}">${escapeHtml(t.device)}</span>
+      </div>
+      <div class="meter"><div class="fill" data-meter="${escapeHtml(t.label)}"></div>
+        <div class="ticks"></div></div>
+    </div>`).join("");
+  updateMeters(tracks);
+}
+
+function updateMeters(tracks) {
+  for (const t of tracks) {
+    const fill = document.querySelector(`.fill[data-meter="${CSS.escape(t.label)}"]`);
+    if (fill) fill.style.width = Math.min(100, (t.level || 0) * 100).toFixed(1) + "%";
+  }
+}
+
+let meterSignature = "";
+
+async function refreshStatus() {
+  let status;
+  try { status = await api("/api/status"); } catch (_) { return; }
+  const rec = status.recording;
+  const wasRecording = state.recording;
+  state.recording = rec.recording;
+
+  $("timer").textContent = clock(rec.elapsed);
+  $("timer").classList.toggle("idle", !rec.recording);
+  $("pillTime").textContent = clock(rec.elapsed);
+  $("recPill").classList.toggle("on", rec.recording);
+  $("recBtn").classList.toggle("recording", rec.recording);
+  $("recBtnLabel").textContent = rec.recording ? "STOP" : "RECORD";
+  $("title").disabled = rec.recording;
+  $("template").disabled = rec.recording;
+
+  if (rec.recording) {
+    $("recSession").textContent = rec.session || "";
+    // Reflect the live session, so a refresh (or a recording started from the
+    // CLI or another tab) doesn't show stale form values while it records.
+    if (rec.title && $("title").value !== rec.title) $("title").value = rec.title;
+    if (rec.template && $("template").value !== rec.template) $("template").value = rec.template;
+    const signature = (rec.tracks || []).map((t) => t.label + t.device).join("|");
+    if (signature !== meterSignature) { meterSignature = signature; renderMeters(rec.tracks); }
+    else updateMeters(rec.tracks);
+    $("recWarn").innerHTML = rec.warning
+      ? `<div class="warn">${escapeHtml(rec.warning)}</div>` : "";
+  } else if (wasRecording || meterSignature) {
+    meterSignature = "";
+    renderMeters(null);
+    if (!wasRecording) $("recSession").textContent = "not recording";
+  }
+
+  if (status.job && status.job.state === "running") state.jobId = status.job.id;
+  if (state.view === "detail" && state.jobId) renderJob(status.job);
+}
+
+// ----------------------------------------------------------------- sessions
+async function loadSessions() {
+  try {
+    const data = await api("/api/sessions");
+    state.sessions = data.sessions;
+    $("notesDir").textContent = data.notes_dir;
+    renderSessions();
+  } catch (err) { toast(err.message, "error"); }
+}
+$("refreshSessions").addEventListener("click", loadSessions);
+
+function renderSessions() {
+  const box = $("sessionsBody");
+  if (!state.sessions.length) {
+    box.innerHTML = '<div class="empty">no sessions yet — record one</div>';
+    return;
+  }
+  const rows = state.sessions.map((s) => {
+    const badge = (on, ch, title) =>
+      `<span class="badge ${on ? "on" : ""}" title="${title}">${ch}</span>`;
+    return `<tr class="row" data-name="${escapeHtml(s.name)}">
+      <td class="name-cell">${escapeHtml(s.name)}</td>
+      <td class="title-cell">${escapeHtml(s.title || "")}</td>
+      <td class="name-cell">${s.duration_seconds ? clock(s.duration_seconds) : "—"}</td>
+      <td><div class="badges">
+        ${badge(s.recorded, "R", "recorded")}
+        ${badge(s.transcribed, "T", "transcribed")}
+        ${badge(s.summarized, "S", "summarized")}
+      </div></td></tr>`;
+  }).join("");
+  box.innerHTML = `<table><thead><tr>
+      <th>session</th><th>title</th><th>length</th><th>status</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  box.querySelectorAll("tr.row").forEach((row) =>
+    row.addEventListener("click", () => openSession(row.dataset.name)));
+}
+
+// ------------------------------------------------------------------- detail
+async function openSession(name) {
+  show("detail");
+  $("detailBody").innerHTML = '<div class="empty">loading…</div>';
+  try {
+    state.detail = await api("/api/sessions/" + encodeURIComponent(name));
+    renderDetail();
+  } catch (err) {
+    $("detailBody").innerHTML = `<div class="warn">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderDetail() {
+  const d = state.detail;
+  const meta = d.meta || {};
+  const bits = [d.name];
+  if (meta.duration_seconds) bits.push(clock(meta.duration_seconds));
+  if (meta.template) bits.push(meta.template);
+  if (d.audio.length) bits.push(d.audio.map((a) => `${a.name} ${humanBytes(a.bytes)}`).join("  "));
+
+  const templateOptions = state.templates.map((t) =>
+    `<option value="${t.key}"${meta.template === t.key ? " selected" : ""}>` +
+    `${escapeHtml(t.label)}</option>`).join("");
+
+  $("detailBody").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <h1>${escapeHtml(d.title || d.name)}</h1>
+        <div class="detail-meta">${escapeHtml(bits.join("  ·  "))}</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:18px">
+      <h2>Reprocess</h2>
+      <div class="controls">
+        <label class="check"><input type="checkbox" id="jobTranscribe" checked> transcribe</label>
+        <label class="check"><input type="checkbox" id="jobSummarize" checked> summarize</label>
+        <label class="check"><input type="checkbox" id="jobForce"> force (overwrite existing)</label>
+        <select id="jobTemplate" style="width:auto">${templateOptions}</select>
+        <button class="act primary" id="runJob">run</button>
+      </div>
+      <div class="log" id="jobLog" style="margin-top:12px;display:none"></div>
+    </div>
+
+    <div class="split">
+      <div>
+        <h2>Transcript</h2>
+        <div class="doc">${d.transcript
+          ? renderMarkdown(d.transcript)
+          : '<div class="empty">no transcript yet</div>'}</div>
+      </div>
+      <div>
+        <h2>Summary</h2>
+        <div class="doc">${d.summary
+          ? renderMarkdown(d.summary)
+          : '<div class="empty">no summary yet</div>'}</div>
+      </div>
+    </div>`;
+
+  $("runJob").addEventListener("click", runJob);
+  if (state.jobId) pollJob();
+}
+
+async function runJob() {
+  const button = $("runJob");
+  button.disabled = true;
+  try {
+    const job = await api(`/api/sessions/${encodeURIComponent(state.detail.name)}/process`, {
+      method: "POST",
+      body: JSON.stringify({
+        transcribe: $("jobTranscribe").checked,
+        summarize: $("jobSummarize").checked,
+        force: $("jobForce").checked,
+        template: $("jobTemplate").value,
+      }),
+    });
+    state.jobId = job.id;
+    renderJob(job);
+    pollJob();
+  } catch (err) {
+    toast(err.message, "error");
+    button.disabled = false;
+  }
+}
+
+function renderJob(job) {
+  const log = $("jobLog");
+  if (!log || !job) return;
+  log.style.display = "block";
+  log.innerHTML = job.lines.map((line) =>
+    line.startsWith("ERROR:") ? `<span class="err">${escapeHtml(line)}</span>`
+                              : escapeHtml(line)).join("\n");
+  log.scrollTop = log.scrollHeight;
+  const button = $("runJob");
+  if (button) button.disabled = job.state === "running";
+}
+
+async function pollJob() {
+  if (!state.jobId) return;
+  let job;
+  try { job = await api("/api/jobs/" + state.jobId); }
+  catch (_) { state.jobId = null; return; }
+  renderJob(job);
+  if (job.state === "running") { setTimeout(pollJob, 700); return; }
+
+  state.jobId = null;
+  if (job.state === "error") toast(job.error || "processing failed", "error");
+  else toast(`finished ${job.session}`, "ok");
+  if (state.view === "detail" && state.detail && state.detail.name === job.session) {
+    const fresh = await api("/api/sessions/" + encodeURIComponent(job.session));
+    const lines = job.lines;
+    state.detail = fresh;
+    renderDetail();
+    renderJob({ ...job, lines });
+  }
+}
+
+// ----------------------------------------------------------------- settings
+async function loadSettings() {
+  try {
+    const s = await api("/api/settings");
+    state.settings = s;
+    $("setModel").innerHTML = s.whisper.choices.map((m) =>
+      `<option value="${m}"${m === s.whisper.model ? " selected" : ""}>${m}</option>`).join("");
+    $("setRetention").value = s.audio.retention_days;
+    $("setDiarize").checked = s.diarization.enabled;
+    $("hfStatus").innerHTML = s.diarization.hf_token_configured
+      ? '<span class="status-dot ok"></span>configured'
+      : '<span class="status-dot off"></span>not set';
+    $("apiStatus").innerHTML = s.api_key.configured
+      ? '<span class="status-dot ok"></span>configured'
+      : '<span class="status-dot off"></span>not set';
+    $("sumModel").textContent = s.summarize.model;
+    $("setNotesDir").textContent = s.paths.notes_dir;
+    $("setInbox").innerHTML = (s.inbox && s.inbox.enabled)
+      ? `<span class="status-dot ok"></span>${escapeHtml(s.inbox.dir)}`
+      : '<span class="status-dot off"></span>disabled';
+  } catch (err) { toast(err.message, "error"); }
+}
+
+$("saveSettings").addEventListener("click", async () => {
+  const button = $("saveSettings");
+  button.disabled = true;
+  try {
+    const updated = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        whisper_model: $("setModel").value,
+        retention_days: Number($("setRetention").value),
+        diarization_enabled: $("setDiarize").checked,
+      }),
+    });
+    state.settings = updated;
+    (updated.notes || []).forEach((n) => toast(n));
+    $("settingsHint").textContent = "saved to config.yaml";
+    setTimeout(() => ($("settingsHint").textContent = ""), 3000);
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+async function loadDevices() {
+  const box = $("devices");
+  try {
+    const data = await api("/api/devices");
+    if (!data.available) {
+      box.innerHTML = `<div class="hint">unavailable: ${escapeHtml(data.reason)}</div>`;
+      return;
+    }
+    const rows = data.devices.map((d) => `<div class="kv">
+        <span class="k">${d.is_loopback ? "loopback" : "input"} ${d.index}</span>
+        <span class="v">${escapeHtml(d.name)}</span></div>`).join("");
+    box.innerHTML = (data.has_loopback ? "" :
+      '<div class="warn">No WASAPI loopback device found — system audio will not be ' +
+      'captured. See the README troubleshooting section.</div>') +
+      (rows || '<div class="hint">no input devices found</div>');
+  } catch (err) {
+    box.innerHTML = `<div class="hint">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// --------------------------------------------------------------------- boot
+loadTemplates().then(refreshStatus).catch((err) => toast(err.message, "error"));
+setInterval(() => { if (state.recording || state.view === "record") refreshStatus(); }, 250);
+setInterval(refreshStatus, 2000);  // catch state changed from the CLI or another tab
+</script>
+</body>
+</html>
