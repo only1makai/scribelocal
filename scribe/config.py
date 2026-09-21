@@ -49,6 +49,30 @@ DEFAULTS: dict[str, Any] = {
         ],
     },
     "diarization": {"enabled": False},
+    "live": {
+        "window_seconds": 8.0,
+        "overlap_seconds": 1.0,
+        # "base", not "small": both tracks share one model and faster-whisper
+        # serializes concurrent calls, so the live cost is ~2x a single track.
+        # Measured on 12 cores: base 0.55x real time, small 1.12x (behind).
+        "model": "base",
+        "max_backlog_seconds": 120.0,
+        # --- live suggestions (the copilot) ---------------------------------
+        "suggestions_enabled": True,
+        # Haiku-class: suggestions are the latency-critical path. The
+        # high-quality summary at Stop still uses summarize.model.
+        "suggestion_model": "claude-haiku-4-5",
+        "suggest_interval_seconds": 8.0,
+        "suggestion_window_seconds": 45.0,
+        "suggestion_transcript_chars": 4000,
+        "suggestion_min_new_chars": 40,
+        "suggestion_max_tokens": 200,
+        "context_char_budget": 6000,
+        "max_suggestion_chars": 500,
+        # Triggers still to come: pause detection (step 3), hotkey (step 4).
+        "pause_trigger_seconds": 1.5,
+        "hotkey": "ctrl+shift+space",
+    },
     "summarize": {
         "model": "claude-sonnet-4-6",
         "template": "general",

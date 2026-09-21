@@ -6,14 +6,36 @@ paths:
 
 audio:
   retention_days: 7        # NOT YET ENFORCED - no cleanup job deletes old WAVs
-  mic_device: null         # null = system default input; or a device index from `scribe devices`
-  loopback_device: null    # null = default output's WASAPI loopback; or a device index
+  mic_device: 53           # Microphone (Brio 101).
+                           # WARNING: these indices are NOT stable. PortAudio renumbers
+                           # every device when one appears or disappears - connecting the
+                           # SRS-XB13 over Bluetooth already shifted this whole range by 8
+                           # once. Re-check with `scribe devices` before a session that
+                           # matters, or make the Brio the Windows default input and set
+                           # this back to null, which matches by endpoint instead of index.
+  loopback_device: null    # null = the WASAPI loopback of the Windows default OUTPUT,
+                           # currently Speakers (Realtek(R) Audio). Left as null on purpose:
+                           # the silence keepalive in recorder.py also opens on the default
+                           # output, so null is the only setting where the two can never
+                           # disagree. Pin an index here and a Windows default change points
+                           # the keepalive at a different endpoint than the loopback - the
+                           # system track then drops silent gaps and drifts off the mic.
   chunk_frames: 4096       # frames per buffer written to disk
 
 whisper:
   model: medium            # tiny | base | small | medium | large-v3
-  device: auto             # auto | cpu | cuda
-  compute_type: auto       # auto | int8 | float16 | ...
+  device: cpu              # auto | cpu | cuda
+                           # NOT auto on this machine. ctranslate2 sees the iGPU,
+                           # selects CUDA, loads the model, then dies on the first
+                           # encode with "Library cublas64_12.dll is not found or
+                           # cannot be loaded" - so the failure lands mid-session
+                           # rather than at startup, after the recording is done.
+  compute_type: int8_float32
+                           # auto | int8 | int8_float32 | float16 | ...
+                           # int8 weights with float32 accumulation: the int8
+                           # speedup on CPU without the accuracy loss of full
+                           # int8, and it keeps peak memory low enough for
+                           # `medium` to run in ~4 GB of free RAM.
   language: null           # null = autodetect
 
 # Merging the two tracks into one transcript. The mic hears the speakers and the
@@ -37,6 +59,68 @@ inbox:
   summarize: true          # false = transcribe imports but don't call the API
   template: null           # null = summarize.template
   extensions: [.m4a, .mp3, .wav, .aac, .flac, .ogg, .opus, .mp4, .m4b, .amr, .wma]
+
+# Live mode: continuous transcription + AI suggestions while a session is
+# still running, alongside the normal record-then-process flow. A live
+# session's audio_mic.wav/audio_system.wav are captured exactly like a record
+# session's, and the full-quality transcript.md at Stop uses `whisper.model`
+# above like any other session - these settings only govern the CHEAP,
+# lower-latency rolling transcript shown while the call is happening.
+live:
+  window_seconds: 8        # seconds of audio per rolling-transcript window
+  overlap_seconds: 1       # overlap between consecutive windows, so words at
+                            # a window boundary aren't cut mid-word
+  model: base               # tiny | base | small | medium | large-v3 - separate
+                            # from whisper.model on purpose. This is the
+                            # speed/accuracy tradeoff knob for the LIVE pass:
+                            # smaller keeps up better on CPU but transcribes
+                            # less accurately. The final transcript.md at Stop
+                            # still uses whisper.model, unaffected by this.
+                            #
+                            # Budget for BOTH tracks at once: mic and system are
+                            # transcribed concurrently but share one model, and
+                            # faster-whisper serializes concurrent calls, so the
+                            # real cost is roughly double a single track's.
+                            # Measured on a 12-core CPU, 8s windows, both tracks
+                            # (1.0x = exactly keeping up with real time):
+                            #   base  -> 0.55x  keeps up, ~2x headroom
+                            #   small -> 1.12x  falls behind; auto-widens to
+                            #            ~16s windows and recovers to ~0.97x,
+                            #            i.e. no headroom left
+                            # A video call is itself using CPU, so leave room.
+                            # Raise to small/medium only if you have headroom.
+  max_backlog_seconds: 120  # hard ceiling on un-transcribed audio held in memory
+                            # per track. Widening windows is the first response
+                            # when whisper falls behind; past this much backlog
+                            # the OLDEST audio is dropped from the LIVE view so
+                            # memory can't grow without bound on a long call.
+                            # The recording and transcript.md are unaffected.
+  # --- live suggestions (the copilot) --------------------------------------
+  # THIS IS WHERE API SPEND HAPPENS. Every trigger is one streamed API call.
+  # Turn it off with suggestions_enabled: false, or per-run: scribe live --no-suggest
+  suggestions_enabled: true
+  suggestion_model: claude-haiku-4-5
+                            # A fast Haiku-class model on purpose: suggestions
+                            # are the latency-critical path and you chose speed
+                            # over polish. This is a real tradeoff - it is less
+                            # capable than summarize.model, which still does the
+                            # high-quality summary at Stop, unaffected by this.
+  suggest_interval_seconds: 8    # auto-trigger cadence. Only fires when at least
+                                 # suggestion_min_new_chars of NEW speech has
+                                 # arrived, so silence doesn't bill you.
+  suggestion_window_seconds: 45  # how much recent transcript to send
+  suggestion_transcript_chars: 4000  # ...and a hard char ceiling on it. Prompt
+                                     # size is latency; both bounds apply.
+  suggestion_min_new_chars: 40   # skip the auto trigger below this much new speech
+  suggestion_max_tokens: 200     # output cap at the API level
+  context_char_budget: 6000      # max characters of reference-doc context injected
+                                 # into a suggestion prompt. Bigger docs are
+                                 # condensed once at session start.
+  max_suggestion_chars: 500      # hard cap on one suggestion's length - this is a
+                                 # glance-and-talk aid, not an essay
+  # Extra triggers, not yet wired up:
+  pause_trigger_seconds: 1.5     # fire when Others goes quiet this long (step 3)
+  hotkey: ctrl+shift+space       # "suggest now" hotkey (step 4)
 
 diarization:
   enabled: false           # needs HF_TOKEN in .env; slow
