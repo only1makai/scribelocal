@@ -90,6 +90,9 @@ def list_sessions(notes_dir: Path) -> list[dict]:
                 "dir": str(entry),
                 "name": entry.name,
                 "title": meta.get("title", entry.name),
+                # "record" | "live". Sessions written before live mode existed
+                # have no `mode` key at all - absent means record, not unknown.
+                "mode": meta.get("mode", "record"),
                 # Any audio counts: laptop captures write audio_mic/audio_system,
                 # inbox imports write audio_phone with the original extension.
                 "recorded": any(entry.glob("audio_*")),

@@ -434,6 +434,16 @@ class TestRecording(ServerTestCase):
 
         self.assertFalse(self.client.get("/api/status").json()["recording"]["recording"])
 
+    def test_record_start_stop_writes_mode_record(self):
+        # Sessions started through the web UI must be tagged the same way
+        # scribe record tags them, so the sessions list can tell record and
+        # live sessions apart no matter which surface created them.
+        self.client.post("/api/record/start", json={"title": "Web session"})
+        done = self.client.post("/api/record/stop", json={})
+        name = done.json()["session"]
+        meta = json.loads((self.notes / name / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["mode"], "record")
+
     def test_double_start_is_refused(self):
         self.client.post("/api/record/start", json={})
         second = self.client.post("/api/record/start", json={})

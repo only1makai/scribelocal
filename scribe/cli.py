@@ -2,6 +2,7 @@
 
   scribe devices              list WASAPI input/loopback devices
   scribe record [--title T]   record until Ctrl+C (or --duration N seconds)
+  scribe live [--title T]     record + live rolling transcript (Ctrl+C to stop)
   scribe list                 list past sessions
   scribe process <session>    transcribe + summarize an existing recording
   scribe serve                run the local web UI (+ inbox watcher)
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -80,9 +82,236 @@ def cmd_record(args) -> int:
         template=args.template or cfg.get("summarize.template"),
         tracks=stats,
         status="recorded",
+        mode="record",
     )
     for label, t in stats.items():
         print(f"  [{label}] {t['seconds']}s -> {t['path']}")
+    print(f"Done. Process it with:  scribe process {session_dir.name}")
+    return 0
+
+
+def cmd_live(args) -> int:
+    """Record + produce a live rolling transcript while the session runs.
+
+    Reuses DualRecorder exactly as cmd_record does - audio_mic.wav and
+    audio_system.wav are written identically, so `scribe process` already
+    works on a live session's output with no special-casing. This command
+    only adds a second, lower-fidelity transcript alongside that, for
+    responsiveness while the call is happening; it does not run
+    transcribe_session/summarize_session at all (that stays a `scribe
+    process` step afterward, same as record mode).
+    """
+    from .audio.recorder import DualRecorder
+    from .live.context import build_context
+    from .live.copilot import CopilotSettings, Suggestion, SuggestionEngine, make_distiller
+    from .live.stream import LiveChunk, LiveSettings, LiveTranscriber
+    from .transcribe import TranscriptionError
+
+    cfg = load_config()
+    title = args.title or "meeting"
+    session_dir = create_session_dir(cfg.notes_dir, title)
+    recorder = DualRecorder(
+        session_dir,
+        mic_device=cfg.get("audio.mic_device"),
+        loopback_device=cfg.get("audio.loopback_device"),
+        chunk_frames=cfg.get("audio.chunk_frames", 4096),
+    )
+    if recorder.warning:
+        print(f"WARNING: {recorder.warning}", file=sys.stderr)
+
+    print(f"Session: {session_dir}")
+    for track in recorder.tracks:
+        print(f"  [{track.label}] {track.device.name} @ {track.device.sample_rate} Hz")
+
+    live_settings = LiveSettings.from_config(cfg)
+    print(
+        f"Live transcript: model={live_settings.model}  "
+        f"window={live_settings.window_seconds:.0f}s  "
+        f"overlap={live_settings.overlap_seconds:.0f}s"
+    )
+
+    # Printing happens from multiple threads (the meter tick below, plus a
+    # live-chunk/warning callback per track). A lock keeps individual print()
+    # calls from interleaving mid-line; it does not - and doesn't need to -
+    # impose any particular ORDER between them.
+    #
+    # Re-entrant on purpose: a streaming suggestion holds this for its whole
+    # duration (on_start acquires, on_done releases), and the engine can emit
+    # an error callback in between - which prints, from the same thread. A
+    # plain Lock would deadlock there.
+    print_lock = threading.RLock()
+
+    def on_chunk(chunk: LiveChunk) -> None:
+        with print_lock:
+            tag = " [lagging]" if chunk.lagging else ""
+            print(f"\n  [{chunk.speaker:<6}]{tag} {chunk.text}")
+
+    def on_warning(track_label: str, message: str) -> None:
+        with print_lock:
+            print(f"\n  WARNING [{track_label}]: {message}", file=sys.stderr)
+
+    # --- copilot: reference docs + suggestion engine -------------------------
+    copilot_settings = CopilotSettings.from_config(cfg)
+    if args.no_suggest:
+        copilot_settings.enabled = False
+
+    context = None
+    if args.context:
+        # The distiller only runs if the docs exceed the budget, and only once,
+        # here at session start - never on the live suggestion path.
+        distiller = None
+        if copilot_settings.enabled:
+            try:
+                distiller = make_distiller(copilot_settings)
+            except Exception as exc:  # no credentials: fall back to truncation
+                print(f"  context: WARNING {exc}", file=sys.stderr)
+        context = build_context(
+            args.context,
+            int(cfg.get("live.context_char_budget", 6000)),
+            distiller=distiller,
+            notify=lambda m: print(f"  {m}"),
+        )
+
+    engine = None
+    if copilot_settings.enabled:
+        print(
+            f"Suggestions: model={copilot_settings.model}  "
+            f"every {copilot_settings.interval_seconds:.0f}s of new speech  "
+            f"max {copilot_settings.max_suggestion_chars} chars"
+            + (f"  context={context.chars:,} chars" if context and not context.is_empty()
+               else "  (no reference docs)")
+        )
+        print("  ^ each suggestion is a billed Anthropic API call")
+    else:
+        print("Suggestions: OFF (no API calls will be made)")
+
+    # A suggestion streams token by token, so the whole thing holds print_lock
+    # for its duration - otherwise the elapsed/meter line would overwrite it
+    # mid-sentence. The meter simply pauses for the second or so it takes.
+    suggestion_lock = threading.Lock()
+
+    def on_suggest_start(reason: str) -> None:
+        suggestion_lock.acquire()
+        print_lock.acquire()
+        print(f"\n  >> SUGGESTION [{reason}] ", end="", flush=True)
+
+    def on_suggest_delta(piece: str) -> None:
+        print(piece, end="", flush=True)
+
+    def on_suggest_done(suggestion: Suggestion) -> None:
+        try:
+            if suggestion.error:
+                # Already printed by on_suggest_error - just close the line so
+                # the error isn't reported twice.
+                print(flush=True)
+            elif suggestion.cancelled:
+                print("  [cancelled - session ended]", flush=True)
+            elif suggestion.superseded:
+                print("  [superseded by a newer trigger]", flush=True)
+            elif not suggestion.text:
+                print("(nothing useful right now)", flush=True)
+            else:
+                first = suggestion.first_token_ms
+                total = suggestion.total_ms
+                timing = ""
+                if first is not None and total is not None:
+                    timing = f"   [first word {first / 1000:.1f}s, complete {total / 1000:.1f}s]"
+                print(timing, flush=True)
+        finally:
+            print_lock.release()
+            suggestion_lock.release()
+
+    def on_suggest_error(message: str) -> None:
+        # The single owner of error output: per-call failures AND engine-level
+        # notices (e.g. automatic suggestions standing down after repeated
+        # failures) both arrive here. on_suggest_done deliberately doesn't
+        # reprint them.
+        with print_lock:
+            print(f"\n  >> ERROR: {message}", flush=True)
+
+    if copilot_settings.enabled:
+        engine = SuggestionEngine(
+            session_dir,
+            copilot_settings,
+            context,
+            on_start=on_suggest_start,
+            on_delta=on_suggest_delta,
+            on_done=on_suggest_done,
+            on_error=on_suggest_error,
+        )
+
+    def on_chunk_and_suggest(chunk: LiveChunk) -> None:
+        on_chunk(chunk)
+        if engine is not None:
+            engine.note_chunk(chunk)
+
+    live = LiveTranscriber(
+        session_dir, live_settings, on_chunk=on_chunk_and_suggest, on_warning=on_warning
+    )
+    try:
+        live.attach(recorder)  # loads the live model; must run before recorder.start()
+    except TranscriptionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        try:
+            if not any(session_dir.iterdir()):
+                session_dir.rmdir()
+        except OSError:
+            pass
+        return 1
+
+    print("Recording + live transcript... Ctrl+C to stop.")
+    if engine is not None:
+        engine.start()
+    recorder.start()
+    started_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        while True:
+            time.sleep(0.2)
+            elapsed = recorder.elapsed()
+            meters = "  ".join(
+                f"{t.label} [{_meter(t.level())}]" for t in recorder.tracks
+            )
+            mins, secs = divmod(int(elapsed), 60)
+            with print_lock:
+                print(f"\r  {mins:02d}:{secs:02d}  {meters}", end="", flush=True)
+            if args.duration and elapsed >= args.duration:
+                break
+    except KeyboardInterrupt:
+        pass
+    print("\nStopping...")
+    stats = recorder.stop()  # joins the writer threads - every tap has now seen every buffer
+    live_stats = live.stop()
+    suggest_stats = engine.stop() if engine is not None else None
+
+    write_meta(
+        session_dir,
+        title=title,
+        started_at=started_iso,
+        duration_seconds=max(t["seconds"] for t in stats.values()),
+        template=args.template or cfg.get("summarize.template"),
+        tracks=stats,
+        status="recorded",
+        mode="live",
+        live_model=live_settings.model,
+        live_stats=live_stats,
+        context_docs=context.as_meta() if context else None,
+        suggestions=suggest_stats,
+    )
+    for label, t in stats.items():
+        print(f"  [{label}] {t['seconds']}s -> {t['path']}")
+    for label, s in live_stats.items():
+        print(f"  [{label}] live: {s['windows']} window(s) transcribed")
+    print(f"Live transcript log: {session_dir / 'live_transcript.jsonl'}")
+    if suggest_stats:
+        median = suggest_stats.get("median_first_token_ms")
+        print(
+            f"Suggestions: {suggest_stats['delivered']} delivered, "
+            f"{suggest_stats['calls']} API call(s), {suggest_stats['errors']} error(s), "
+            f"{suggest_stats['superseded']} superseded"
+        )
+        if median is not None:
+            print(f"  median time to first word: {median / 1000:.2f}s")
+        print(f"  suggestions log: {session_dir / 'suggestions.jsonl'}")
     print(f"Done. Process it with:  scribe process {session_dir.name}")
     return 0
 
@@ -201,6 +430,26 @@ def main(argv: list[str] | None = None) -> int:
     rec.add_argument("--duration", "-d", type=float, help="stop after N seconds")
     rec.add_argument("--template", help="summary template to use later")
     rec.set_defaults(func=cmd_record)
+
+    live = sub.add_parser(
+        "live", help="record + live rolling transcript (Ctrl+C to stop)"
+    )
+    live.add_argument("--title", "-t", help="session title")
+    live.add_argument("--duration", "-d", type=float, help="stop after N seconds")
+    live.add_argument("--template", help="summary template to use later")
+    live.add_argument(
+        "--context",
+        action="append",
+        metavar="PATH",
+        help="reference doc to ground suggestions in (repeatable): "
+             "--context pricing.md --context playbook.md",
+    )
+    live.add_argument(
+        "--no-suggest",
+        action="store_true",
+        help="record + live transcript only, no suggestion API calls",
+    )
+    live.set_defaults(func=cmd_live)
 
     sub.add_parser("list", help="list sessions").set_defaults(func=cmd_list)
 

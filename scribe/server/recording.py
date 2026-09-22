@@ -95,6 +95,7 @@ class RecordingManager:
                 template=self._template,
                 tracks=stats,
                 status="recorded",
+                mode="record",
             )
             self._last = {
                 "session": session_dir.name,
