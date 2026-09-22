@@ -24,20 +24,20 @@ Linux equivalent here.
 
 ## Setup
 
-### 1. Python 3.12 and a virtual environment
+### 1. Python 3.11+ and a virtual environment
 
-Python **3.12** is recommended (3.11+ is required). Newer versions can be ahead
-of the wheels `faster-whisper` and its `ctranslate2` backend publish.
+Python 3.11 or newer works. `faster-whisper`'s `ctranslate2` backend has
+historically lagged behind new Python releases, so if the `transcribe` extra
+fails to install on whatever `python` resolves to on your machine, that's the
+first thing to suspect — install a slightly older Python (3.12 is a safe,
+well-tested choice) and retry, rather than assuming something else is wrong.
 
 ```powershell
 cd path\to\scribelocal
-py -3.12 -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 ```
-
-If `py -3.12` isn't found, install Python 3.12 from
-[python.org](https://www.python.org/downloads/) and re-run.
 
 ### 2. Install
 
@@ -568,8 +568,15 @@ is readable JSON if you want to script against it.
 ## Development
 
 ```powershell
+pip install -e ".[test]"
 python -m unittest discover tests
 ```
+
+The full suite needs `transcribe`, `summarize`, and `server` all installed
+together — the `test` extra bundles those plus the one dependency none of them
+declare on its own (an HTTP client for FastAPI's `TestClient`). Installing
+only a subset, `server` in particular, fails test discovery with an unrelated-
+looking `RuntimeError` about `httpx2` rather than a clean skip.
 
 The suite covers the merge/dedup logic, summarization chunking and error
 handling (against a stubbed SDK), and the web API (against a sandboxed config

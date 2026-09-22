@@ -12,9 +12,18 @@ dependencies = [
 
 [project.optional-dependencies]
 transcribe = ["faster-whisper>=1.0"]
-summarize = ["anthropic>=0.40"]
-server = ["fastapi>=0.110", "uvicorn>=0.29", "watchfiles>=0.21"]
+summarize = ["anthropic>=1.6.0"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
 diarize = ["pyannote.audio>=3.1"]
+# Running `python -m unittest discover tests` needs transcribe+summarize+server
+# together: tests/test_server.py's FastAPI TestClient needs an HTTP client
+# (httpx2), which no single extra above declares - it has only ever been
+# present by accident, as a transitive pull from anthropic or huggingface-hub.
+# Installing `server` alone (a combination the table above otherwise supports)
+# leaves both absent and crashes test discovery with an unrelated-looking
+# RuntimeError. `test` pins httpx2 directly so that stays true regardless of
+# whether some other package's dependencies happen to change upstream.
+test = ["scribelocal[transcribe,summarize,server]", "httpx2>=2.0.0"]
 
 [project.scripts]
 scribe = "scribe.cli:main"
