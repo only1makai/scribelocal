@@ -47,8 +47,8 @@ class DualRecorder:
     def __init__(
         self,
         session_dir: Path,
-        mic_device: int | None = None,
-        loopback_device: int | None = None,
+        mic_device: int | str | None = None,
+        loopback_device: int | str | None = None,
         chunk_frames: int = 4096,
     ):
         self.session_dir = session_dir
@@ -59,10 +59,17 @@ class DualRecorder:
         self._keepalive: pyaudio.Stream | None = None
         self.tracks: list[Track] = []
 
-        mic = get_default_mic(self._p, mic_device)
-        self.tracks.append(Track("mic", mic, session_dir / "audio_mic.wav"))
+        try:
+            mic = get_default_mic(self._p, mic_device)
+            loopback = get_default_loopback(self._p, loopback_device)
+        except Exception:
+            # Nothing has been opened yet, but PortAudio has been initialised;
+            # a recorder that never constructs is never stop()ped, so release
+            # it here rather than leak it for the life of the process.
+            self._p.terminate()
+            raise
 
-        loopback = get_default_loopback(self._p, loopback_device)
+        self.tracks.append(Track("mic", mic, session_dir / "audio_mic.wav"))
         if loopback is None:
             self.warning = (
                 "No WASAPI loopback device found - recording microphone only. "

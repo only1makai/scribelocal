@@ -66,7 +66,7 @@ pip install -e ".[test]"
 python -m unittest discover tests
 ```
 
-**Expected on `main`: 211/211 tests passing** from a fresh clone and a fresh
+**Expected on `main`: 240/240 tests passing** from a fresh clone and a fresh
 venv. If you add tests, report the new count. Installing only `.[server]` and
 running the suite fails 5 tests on missing `httpx2`. That is **expected by
 design**, so do not "fix" it.

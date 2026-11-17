@@ -6,6 +6,12 @@ paths:
 
 audio:
   retention_days: 7        # NOT YET ENFORCED - no cleanup job deletes old WAVs
+  # mic_device / loopback_device take an index OR a name. A name is matched
+  # case-insensitively against the names `scribe devices` prints, and a unique
+  # part of it is enough:  mic_device: "Brio"  or  loopback_device: "Realtek".
+  # A name survives the renumbering described below; an index doesn't. If the
+  # name matches no device, or more than one, `scribe record` refuses to start
+  # and lists the candidates - it never falls back to a different device.
   mic_device: 53           # Microphone (Brio 101).
                            # WARNING: these indices are NOT stable. PortAudio renumbers
                            # every device when one appears or disappears - connecting the
@@ -17,7 +23,7 @@ audio:
                            # currently Speakers (Realtek(R) Audio). Left as null on purpose:
                            # the silence keepalive in recorder.py also opens on the default
                            # output, so null is the only setting where the two can never
-                           # disagree. Pin an index here and a Windows default change points
+                           # disagree. Pin an index or a name here and a Windows default change points
                            # the keepalive at a different endpoint than the loopback - the
                            # system track then drops silent gaps and drifts off the mic.
   chunk_frames: 4096       # frames per buffer written to disk
