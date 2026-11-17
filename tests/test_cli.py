@@ -259,5 +259,68 @@ class TestCmdLive(LiveTestCase):
         )
 
 
+class TestDeviceSelectionErrors(CliTestCase):
+    """A configured device that can't be resolved stops the command cleanly."""
+
+    MESSAGE = 'No microphone matching "Yeti" (audio.mic_device). Available:\n  [0] Microphone (Brio 101)'
+
+    def setUp(self):
+        super().setUp()
+        import scribe.audio.recorder as recorder_module
+        from scribe.audio.devices import DeviceSelectionError
+
+        message = self.MESSAGE
+
+        class UnresolvableRecorder(FakeRecorder):
+            def __init__(self, *args, **kwargs):
+                raise DeviceSelectionError(message)
+
+        recorder_module.DualRecorder = UnresolvableRecorder
+
+    def _run(self, fn, args):
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = fn(args)
+        return rc, err.getvalue()
+
+    def test_record_exits_2_with_the_message_and_no_empty_session(self):
+        from scribe.cli import cmd_record
+
+        rc, err = self._run(
+            cmd_record, argparse.Namespace(title="Lecture", duration=0.05, template=None)
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn(self.MESSAGE, err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(list(self.notes.iterdir()), [], "an empty session dir was left behind")
+
+    def test_live_exits_2_with_the_message_and_no_empty_session(self):
+        from scribe.cli import cmd_live
+
+        rc, err = self._run(cmd_live, argparse.Namespace(
+            title="Lecture", duration=0.05, template=None, context=None, no_suggest=True))
+        self.assertEqual(rc, 2)
+        self.assertIn(self.MESSAGE, err)
+        self.assertEqual(list(self.notes.iterdir()), [], "an empty session dir was left behind")
+
+    def test_existing_session_folder_with_files_is_never_removed(self):
+        # create_session_dir() reuses a same-minute, same-title folder. If that
+        # folder already holds a recording, a device error must leave it alone.
+        from scribe.cli import cmd_record
+        from scribe.session import create_session_dir
+
+        existing = create_session_dir(self.notes, "Lecture")
+        (existing / "audio_mic.wav").write_bytes(b"RIFF")
+
+        rc, _ = self._run(
+            cmd_record, argparse.Namespace(title="Lecture", duration=0.05, template=None)
+        )
+        self.assertEqual(rc, 2)
+        self.assertTrue((existing / "audio_mic.wav").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

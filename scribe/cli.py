@@ -36,18 +36,37 @@ def cmd_devices(_args) -> int:
     return 0
 
 
+def _remove_if_empty(session_dir) -> None:
+    """Drop a session folder this command just created, if nothing was written to it.
+
+    Only an empty folder is ever removed: create_session_dir() reuses an
+    existing folder with the same minute and title, which may hold a recording.
+    """
+    try:
+        if not any(session_dir.iterdir()):
+            session_dir.rmdir()
+    except OSError:
+        pass
+
+
 def cmd_record(args) -> int:
+    from .audio.devices import DeviceSelectionError
     from .audio.recorder import DualRecorder
 
     cfg = load_config()
     title = args.title or "meeting"
     session_dir = create_session_dir(cfg.notes_dir, title)
-    recorder = DualRecorder(
-        session_dir,
-        mic_device=cfg.get("audio.mic_device"),
-        loopback_device=cfg.get("audio.loopback_device"),
-        chunk_frames=cfg.get("audio.chunk_frames", 4096),
-    )
+    try:
+        recorder = DualRecorder(
+            session_dir,
+            mic_device=cfg.get("audio.mic_device"),
+            loopback_device=cfg.get("audio.loopback_device"),
+            chunk_frames=cfg.get("audio.chunk_frames", 4096),
+        )
+    except DeviceSelectionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _remove_if_empty(session_dir)
+        return 2
     if recorder.warning:
         print(f"WARNING: {recorder.warning}", file=sys.stderr)
 
@@ -101,6 +120,7 @@ def cmd_live(args) -> int:
     transcribe_session/summarize_session at all (that stays a `scribe
     process` step afterward, same as record mode).
     """
+    from .audio.devices import DeviceSelectionError
     from .audio.recorder import DualRecorder
     from .live.context import build_context
     from .live.copilot import CopilotSettings, Suggestion, SuggestionEngine, make_distiller
@@ -110,12 +130,17 @@ def cmd_live(args) -> int:
     cfg = load_config()
     title = args.title or "meeting"
     session_dir = create_session_dir(cfg.notes_dir, title)
-    recorder = DualRecorder(
-        session_dir,
-        mic_device=cfg.get("audio.mic_device"),
-        loopback_device=cfg.get("audio.loopback_device"),
-        chunk_frames=cfg.get("audio.chunk_frames", 4096),
-    )
+    try:
+        recorder = DualRecorder(
+            session_dir,
+            mic_device=cfg.get("audio.mic_device"),
+            loopback_device=cfg.get("audio.loopback_device"),
+            chunk_frames=cfg.get("audio.chunk_frames", 4096),
+        )
+    except DeviceSelectionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _remove_if_empty(session_dir)
+        return 2
     if recorder.warning:
         print(f"WARNING: {recorder.warning}", file=sys.stderr)
 
